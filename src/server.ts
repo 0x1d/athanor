@@ -2,10 +2,17 @@ import {
   handleAgentsGet,
   handleAgentsPost,
   handleConfigGet,
+  handleModulesCheck,
+  handleServiceCall,
+  handleServiceManifestPost,
+  handleServicesGet,
+  handleServiceTokensPost,
+  handleServiceTypesGet,
   handleStorageDelete,
   handleStorageGet,
   handleStoragePost,
 } from "@/lib/api/http";
+import { restrictedPreflight, withRestrictedCors, type OriginPolicy } from "@/lib/api/origin";
 import { buildPreviewBundle } from "@/lib/preview-bundle";
 import { resolveWebRoot, serveWebFile } from "@/lib/web-static";
 
@@ -53,6 +60,11 @@ function asset(body: string, contentType: string): Response {
   return new Response(body, { headers });
 }
 
+/** Service calls come from the preview, whose WebView origin is opaque (`null`). */
+const serviceCallPolicy: OriginPolicy = { allowOpaque: true, methods: "POST, OPTIONS" };
+/** Minting tokens and publishing are IDE actions only. */
+const idePolicy: OriginPolicy = { methods: "POST, OPTIONS" };
+
 const server = Bun.serve({
   port,
   routes: {
@@ -63,11 +75,39 @@ const server = Bun.serve({
     "/favicon.ico": Bun.file("public/favicon.ico"),
     "/api/agents": {
       GET: () => withCors(handleAgentsGet()),
-      POST: (req) => withCorsAsync(handleAgentsPost, req),
+      POST: (req, srv) => {
+        // An agent turn streams for as long as the agent works.
+        srv.timeout(req, 0);
+        return withCorsAsync(handleAgentsPost, req);
+      },
       OPTIONS: () => new Response(null, { headers: corsHeaders() }),
     },
     "/api/config": {
       GET: () => withCors(handleConfigGet()),
+      OPTIONS: () => new Response(null, { headers: corsHeaders() }),
+    },
+    "/api/modules/check": {
+      POST: (req) => withCorsAsync(handleModulesCheck, req),
+      OPTIONS: () => new Response(null, { headers: corsHeaders() }),
+    },
+    "/api/services": {
+      GET: () => withCors(handleServicesGet()),
+      OPTIONS: () => new Response(null, { headers: corsHeaders() }),
+    },
+    "/api/services/:slug": {
+      POST: (req) => withRestrictedCors(req, serviceCallPolicy, (r) => handleServiceCall(r, req.params.slug)),
+      OPTIONS: (req) => restrictedPreflight(req, serviceCallPolicy),
+    },
+    "/api/service-manifest": {
+      POST: (req) => withRestrictedCors(req, idePolicy, handleServiceManifestPost),
+      OPTIONS: (req) => restrictedPreflight(req, idePolicy),
+    },
+    "/api/service-tokens": {
+      POST: (req) => withRestrictedCors(req, idePolicy, handleServiceTokensPost),
+      OPTIONS: (req) => restrictedPreflight(req, idePolicy),
+    },
+    "/api/service-types": {
+      GET: () => withCors(handleServiceTypesGet()),
       OPTIONS: () => new Response(null, { headers: corsHeaders() }),
     },
     "/api/storage": {

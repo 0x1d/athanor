@@ -12,7 +12,8 @@
 - **NSH app shell** — Zed-style `DockArea`: agents on the left (sessions and conversation tabs), editor in the center, object tree on the right, runtime along the bottom. Collapsed panes leave an activity rail.
 - **Object tree** — components and files under `components/`, developed through nshde
 - **Code editor** — `nsh/base` `Editor` with syntax highlighting for TSX/JSON
-- **Agent panel** — Architect, Implementer, and Reviewer, chosen from a menu on the composer, with `TextView` and a chat-style field
+- **Agent panel** — the [alchemist](https://github.com/0x1d/alchemist) Claude host as a sidecar, streamed into the conversation; Architect, Implementer, or Reviewer chosen from a menu on the composer
+- **Services** — backend logic as alchemist Elixir codex entries; components call published services through `@nshde/services` and a call-only BEAM gateway
 - **Configurable storage** — `fs` (default, `.nshde-data/`), `memory`, or `s3` (AWS SDK hook; falls back to in-memory demo when creds are absent)
 - **Runtime loading** — `.nsh.tsx` modules compiled with Sucrase in a `/preview` sandbox; `.wasm` modules instantiated with host imports
 
@@ -43,6 +44,24 @@ bun run dev
 ```
 
 Open the URL printed by `nsh run` (typically `http://127.0.0.1:8790/`). The API stays on port `43123` unless you set `PORT`.
+
+### Agent and services
+
+The agent is the alchemist nshde host (see its `hosts/nshde/README.md`). Run it beside nshde:
+
+```bash
+# in the alchemist checkout (Node 24+, Elixir; Claude credentials for the Agent SDK)
+NSHDE_API_URL=http://127.0.0.1:43123 npm run serve:nshde      # sidecar on :43124
+
+# in nshde
+NSHDE_AGENT_URL=http://127.0.0.1:43124 ALCHEMIST_DIR=../alchemist bun run dev:api
+```
+
+Ask for a component and a service. The component hot-mounts in the preview; publish the service from the explorer's `services` folder so the component can call it.
+
+```bash
+bun run test   # server tests (bun test src)
+```
 
 Production API:
 

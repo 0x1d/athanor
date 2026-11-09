@@ -1,12 +1,12 @@
 ---
 id: "006"
 feature: alchemist-integration
-state: TODO
+state: IN_PROGRESS
 slices:
-  agent-sidecar: TODO
-  component-entries: TODO
-  service-gateway: TODO
-  service-binding: TODO
+  agent-sidecar: DONE
+  component-entries: DONE
+  service-gateway: IN_PROGRESS
+  service-binding: DONE
 ---
 
 # Alchemist integration
@@ -79,6 +79,14 @@ nshde adds `POST /api/modules/check` for the compile step.
 - The IDE mints a short-lived token scoped to those slugs and passes it to the preview. `/api/services/:slug` checks it.
 - CORS is limited to the IDE origin.
 - TypeScript types for service calls are generated from the schemas.
+
+## Status
+
+- Sidecar: alchemist `hosts/nshde/sidecar.ts` (`POST /sessions`, SSE). nshde proxies `/api/agents` to it; the stub generator is gone.
+- Component entries: `functions/nshde/component/{write,read,list,check}` plus `nshde.api`. `write` checks first and refuses a source with errors.
+- Gateway: `Runtime.ServiceGateway` (`runtime/lib/runtime/service_gateway.ex`) with schema validation, a task per call, a timeout, and `max_heap_size`. The manifest is `<state dir>/services.json`; nshde writes it on Publish. Open: the alchemist mirror has no `Runtime.Application`, so the gateway is not yet listed among its children.
+- Binding: `@nshde/services` in the loader, `export const capabilities`, tokens from `POST /api/service-tokens` in the preview URL fragment, origin policy in `src/lib/api/origin.ts`, and `components/services.d.ts` generated on publish.
+- Verified: the real gateway and nshde server together refuse unpublished slugs (403), changed sources (409), and missing or foreign tokens (401/403); a component in an opaque sandboxed preview renders the service's data. The prompt-to-component-and-service run needs Claude credentials for the sidecar and is not yet run.
 
 ## Out of scope
 

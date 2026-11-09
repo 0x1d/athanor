@@ -12,7 +12,12 @@ Living map of domain language and architecture. Update this when behavior or voc
 |------|---------|
 | **NSH shell component** | TSX module (`.nsh.tsx`) meant to run in the sandboxed runtime, NSH-style |
 | **Object tree** | NSH UI listing stored paths under `components/` |
-| **Agent** | Template role (Architect, Implementer, Reviewer) that generates module source from a prompt |
+| **Agent** | The alchemist Claude host, run as a sidecar. The role (Architect, Implementer, Reviewer) shapes its system prompt |
+| **Sidecar** | alchemist `hosts/nshde/sidecar.ts`, a Node process; `POST /sessions` streams a session as SSE. `NSHDE_AGENT_URL` points at it |
+| **Service** | Alchemist codex entry `services.<name>` (Elixir). `meta.json` carries `service.input_schema` and `service.output_schema` |
+| **Publish** | Explorer action that writes `{ slug, source_sha256 }` to the service manifest. A changed source needs publishing again |
+| **Service gateway** | `Runtime.ServiceGateway`, a call-only BEAM listener that runs published services |
+| **Capabilities** | `export const capabilities = ["service:<name>"]` in a component; scopes its service token |
 | **Storage backend** | `fs` (`.nshde-data/`), `memory`, or `s3` — where module files live |
 | **Runtime loader** | React sandbox in `/preview` (classic script, Sucrase + optional WASM). A same-origin WebView is an opaque sandbox and refuses module scripts. IDE chrome is NSH (`App.tsx`) |
 | **Mount / run** | Load a module path into the runtime preview WebView |
@@ -26,6 +31,11 @@ flowchart LR
   UI --> Preview[/preview WebView/]
   Preview --> Loader[Runtime loader]
   Loader --> Storage
+  API -->|/api/agents SSE| Sidecar[alchemist sidecar · Node]
+  Sidecar --> Beam[BEAM codex]
+  Beam -->|nshde.component.*| API
+  Loader -->|/api/services/:slug + token| API
+  API -->|call only| Gateway[Runtime.ServiceGateway]
 ```
 
 ## UI stack
@@ -43,10 +53,33 @@ flowchart LR
 ## API surface
 
 - `GET/POST/DELETE /api/storage` — read/write/tree/delete module files
-- `GET/POST /api/agents` — list agents; generate module from prompt
+- `GET /api/agents` — list roles
+- `POST /api/agents` — `{ prompt, agentId?, sessionId? }`; proxies one turn to the sidecar and streams its SSE (`session`, `text`, `tool`, `tool_result`, `component`, `done`, `error`). A `component` event hot-mounts that file
+- `POST /api/modules/check` — `{ source }` or `{ path }`; Sucrase compile, allowed imports, default export, declared capabilities
+- `GET /api/services` — services from the alchemist tree (read-only) with `published` and `stale`
+- `POST /api/service-manifest` — `{ slug, published }`; publish or unpublish, then regenerate `components/services.d.ts`
+- `GET /api/service-types` — `@nshde/services` declarations from the schemas
+- `POST /api/service-tokens` — `{ path }`; a 10-minute token scoped to that component's capabilities
+- `POST /api/services/:slug` — body is the args; needs `Authorization: Bearer <token>`; forwards `call` to the gateway
 - `GET /api/config` — active storage backend and options
 - `GET /preview` — React sandbox iframe for mounted modules
 
+## Services in the preview
+
+- The loader resolves `react` and the virtual module `@nshde/services` (`call(slug, args)`, `useService(slug, args)`), scoped to the module's own `capabilities`.
+- The IDE mints a token when it builds the preview URL and puts it in the fragment (`#token=`). The preview sends it as a bearer token.
+- Origins: service calls accept the IDE origins and `null` (the preview WebView is an opaque sandbox). Minting and publishing accept only the IDE origins. A refused origin gets 403 before anything runs. `NSHDE_IDE_ORIGIN` (comma-separated) sets the IDE origins; otherwise the server's own origin and, outside production, localhost.
+
+## Configuration
+
+| Variable | Meaning |
+|----------|---------|
+| `NSHDE_AGENT_URL` | Sidecar base URL. Without it `POST /api/agents` answers 503 |
+| `ALCHEMIST_DIR` | Alchemist checkout; gives the functions dir, state dir, manifest, and gateway port file |
+| `AGENT_FUNCTIONS_DIR`, `ALCHEMIST_STATE_DIR`, `ALCHEMIST_SERVICE_MANIFEST`, `ALCHEMIST_GATEWAY_PORT` | Overrides, same names as the alchemist runtime |
+| `NSHDE_SERVICE_SECRET` | HMAC key for service tokens (random per process otherwise) |
+| `NSHDE_IDE_ORIGIN` | Allowed IDE origins for the service routes |
+
 ## Out of scope (today)
 
-Signed packages, capability tokens, real S3 SDK wiring, LLM-backed agents (stubs only), dynamic NSH compilation of user modules in-process (preview still uses the React sandbox).
+Signed packages, real S3 SDK wiring, running services on a separate BEAM node, dynamic NSH compilation of user modules in-process (preview still uses the React sandbox).

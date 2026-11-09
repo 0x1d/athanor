@@ -1,5 +1,6 @@
-import { transform } from "sucrase";
 import React from "react";
+import { compileModule, SERVICES_MODULE } from "./check";
+import { createServicesModule } from "../services/client";
 
 export type LoadedModule =
   | { kind: "tsx"; component: React.ComponentType; path: string }
@@ -9,16 +10,15 @@ export async function loadTsxModule(
   path: string,
   source: string,
 ): Promise<React.ComponentType> {
-  const { code } = transform(source, {
-    transforms: ["jsx", "typescript", "imports"],
-    jsxRuntime: "classic",
-    production: true,
-  });
+  const code = compileModule(source);
 
-  const module = { exports: {} as { default?: React.ComponentType } };
-  const require = (id: string) => {
+  const module = { exports: {} as { default?: React.ComponentType; capabilities?: unknown } };
+  // Scoped to this module's own `export const capabilities`, read at call time.
+  const services = createServicesModule(() => module.exports.capabilities);
+  const require = (id: string): unknown => {
     if (id === "react") return React;
-    if (id === "react/jsx-runtime") return require("react");
+    if (id === "react/jsx-runtime") return React;
+    if (id === SERVICES_MODULE) return services;
     throw new Error(`Import not allowed in sandbox: ${id}`);
   };
 
