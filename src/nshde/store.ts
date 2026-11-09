@@ -1,11 +1,14 @@
 import { batch, effect, signal } from "nsh";
 import type { DockAreaLayout, DockAreaRef } from "nsh/base";
 import type { AgentMessage } from "../lib/agents";
+import type { ServiceInfo } from "../lib/services/registry";
 import type { StorageBackend } from "../lib/storage/types";
 import {
+  listServices,
   loadConfig,
   loadTree,
   previewUrl,
+  publishService,
   readFile,
   setBackend,
   writeFile,
@@ -36,6 +39,8 @@ export interface AgentSession {
   title: string;
   messages: AgentMessage[];
   loading: boolean;
+  /** Sidecar session to resume on the next turn. */
+  agentSessionId?: string;
 }
 
 function blankSession(id: string, title = "New agent"): AgentSession {
@@ -55,6 +60,9 @@ export const runtimeRevision = signal(0);
 export const backend = signal<StorageBackend>("fs");
 export const previewSrc = signal("http://127.0.0.1:43123/preview/blank");
 export const bootError = signal<string | null>(null);
+/** Alchemist services (read-only), or null when nshde has no alchemist checkout configured. */
+export const services = signal<ServiceInfo[] | null>(null);
+export const servicesBusy = signal<string | null>(null);
 
 export type PhonePane = "editor" | "agents" | "explorer" | "runtime";
 /** Which full-screen section the phone shell shows. The wide layout ignores it. */
@@ -124,6 +132,41 @@ export async function refreshTree() {
     backend.set(data.backend);
   } catch (e) {
     bootError.set(e instanceof Error ? e.message : "Failed to load object tree");
+  }
+}
+
+export async function refreshServices() {
+  try {
+    const data = await listServices();
+    services.set(data.configured ? data.services : null);
+  } catch {
+    services.set(null);
+  }
+}
+
+export async function setServicePublished(slug: string, published: boolean) {
+  servicesBusy.set(slug);
+  try {
+    bootError.set(null);
+    await publishService(slug, published);
+    await refreshServices();
+    await refreshTree();
+    // A mounted component may call this service; give it a fresh token.
+    if (runtimePath()) runtimeRevision.update((r) => r + 1);
+  } catch (e) {
+    bootError.set(e instanceof Error ? e.message : `Failed to publish ${slug}`);
+  } finally {
+    servicesBusy.set(null);
+  }
+}
+
+/** The agent wrote a component: load it, open it, and hot-mount it in the preview. */
+export async function handleComponentWritten(path: string) {
+  try {
+    const source = await readFile(path);
+    handleModuleGenerated(path, source);
+  } catch (e) {
+    bootError.set(e instanceof Error ? e.message : `Failed to open ${path}`);
   }
 }
 
@@ -284,6 +327,7 @@ export function bootIdeData() {
   effect(() => {
     void loadConfig().then((c) => backend.set(c.backend));
     void refreshTree().then(() => void loadFile(WELCOME));
+    void refreshServices();
   });
   effect(() => {
     const path = runtimePath();

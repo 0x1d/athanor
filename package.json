@@ -11,7 +11,8 @@
     "build": "bun build src/server.ts --target=bun --outdir dist --minify",
     "build:web": "bash scripts/nsh-run.sh package . --target web",
     "start": "NODE_ENV=production bun src/server.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "bun test src"
   },
   "dependencies": {
     "react": "19.3.0",

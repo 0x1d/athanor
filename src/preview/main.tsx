@@ -3,6 +3,10 @@ import { createRoot } from "react-dom/client";
 import { useEffect, useState } from "react";
 import "@/client/globals.css";
 import { loadModuleFromStorage, type LoadedModule } from "@/lib/modules/loader";
+import { configureServiceRuntime } from "@/lib/services/client";
+
+// The IDE passes the service token in the fragment, which is not sent to the server or logged.
+configureServiceRuntime({ token: new URLSearchParams(window.location.hash.slice(1)).get("token") });
 
 function RuntimePreview() {
   const params = new URLSearchParams(window.location.search);

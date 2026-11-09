@@ -6,6 +6,8 @@ const network = {
   "GET http://127.0.0.1:43123/api/storage?path=components%2Fwelcome.nsh.tsx": {
     body: { content: "export function Welcome() { return null }\n" },
   },
+  "GET http://127.0.0.1:43123/api/services": { body: { configured: false, services: [] } },
+  "POST http://127.0.0.1:43123/api/service-tokens": { body: { token: null, slugs: [] } },
   "GET http://127.0.0.1:43123/api/agents": {
     body: {
       agents: [
@@ -209,4 +211,30 @@ test("the agent role menu updates the selected role", async () => {
   await app.press("Architect");
   expect(app.texts().join(" ")).toMatch(/Architect/);
   expect(app.texts().join(" ")).not.toMatch(/Implementer/);
+});
+
+test("the explorer lists services with a publish action", async () => {
+  const app = await open("./App.tsx", {
+    width: 1280,
+    height: 800,
+    platform: "web",
+    network: {
+      ...network,
+      "GET http://127.0.0.1:43123/api/services": {
+        body: {
+          configured: true,
+          services: [
+            { slug: "greeting", summary: "Greet", sourceSha256: "a", valid: true, published: false, stale: false },
+            { slug: "weather", summary: "", sourceSha256: "b", valid: true, published: true, stale: true },
+          ],
+        },
+      },
+    },
+  });
+  const text = app.texts().join("\n");
+  expect(text).toMatch(/services/);
+  expect(text).toMatch(/greeting/);
+  expect(text).toMatch(/changed/);
+  expect(app.shows("Publish greeting")).toBe(true);
+  expect(app.shows("Publish weather")).toBe(true);
 });

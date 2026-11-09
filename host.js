@@ -57,11 +57,6 @@ export async function createHost() {
           });
         case "nshde.agents.list":
           return fetchJson("/api/agents");
-        case "nshde.agents.generate":
-          return fetchJson("/api/agents", {
-            method: "POST",
-            body: JSON.stringify({ prompt: args.prompt, agentId: args.agentId }),
-          });
         default:
           throw new Error(`unknown host function ${name}`);
       }

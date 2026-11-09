@@ -1,9 +1,9 @@
 import { batch, effect, platform, Scroll, signal, Text, token, View } from "nsh";
 import { Button, Input, Menu, MenuItem, TextView } from "nsh/base";
-import { AGENTS, type AgentDefinition, type AgentId, type AgentMessage } from "../lib/agents";
-import { generateModule, listAgents } from "./api";
+import { AGENTS, type AgentDefinition, type AgentEvent, type AgentId, type AgentMessage } from "../lib/agents";
+import { listAgents, streamAgent } from "./api";
 import { isPhoneWidth } from "./phone";
-import { handleModuleGenerated, patchSession, sessions } from "./store";
+import { handleComponentWritten, patchSession, refreshServices, refreshTree, sessions } from "./store";
 
 const PROMPTS = [
   { label: "Todo list", text: "Build a todo list module" },
@@ -21,6 +21,15 @@ function readInput(value: unknown): string {
     return typeof next === "string" ? next : "";
   }
   return "";
+}
+
+/** One line for a codex tool call, such as `call_function nshde.component.write`. */
+function toolLine(name: string, input: unknown): string {
+  const detail =
+    input && typeof input === "object"
+      ? ((input as { name?: unknown; query?: unknown }).name ?? (input as { query?: unknown }).query)
+      : undefined;
+  return typeof detail === "string" ? `\`${name}\` ${detail}` : `\`${name}\``;
 }
 
 function clipTitle(text: string): string {
@@ -103,29 +112,53 @@ function Conversation(props: { sessionId: string }) {
       inputHeight.set(20);
     });
 
-    try {
-      const data = await generateModule(text, activeAgent());
-      const latest = sessions().find((item) => item.id === props.sessionId);
-      patchSession(props.sessionId, {
-        messages: [...(latest?.messages ?? []), ...data.messages],
-        loading: false,
-      });
-      if (data.generatedPath && data.source) {
-        handleModuleGenerated(data.generatedPath, data.source);
+    const agentId = activeAgent();
+    const latest = () => sessions().find((item) => item.id === props.sessionId);
+    const append = (message: AgentMessage) =>
+      patchSession(props.sessionId, { messages: [...(latest()?.messages ?? []), message] });
+    const say = (role: AgentMessage["role"], content: string, id: string = crypto.randomUUID()) =>
+      append({ id, agentId, role, content, timestamp: new Date().toISOString() });
+
+    const onEvent = (event: AgentEvent) => {
+      switch (event.type) {
+        case "session":
+          patchSession(props.sessionId, { agentSessionId: event.sessionId });
+          break;
+        case "text":
+          say("assistant", event.text);
+          break;
+        case "tool":
+          say("system", toolLine(event.name, event.input), `tool:${event.id}`);
+          break;
+        case "tool_result": {
+          const id = `tool:${event.id}`;
+          patchSession(props.sessionId, {
+            messages: (latest()?.messages ?? []).map((msg) =>
+              msg.id === id ? { ...msg, content: `${msg.content} ${event.ok ? "✓" : `✕ ${(event.error ?? "").slice(0, 160)}`}`.trim() } : msg,
+            ),
+          });
+          break;
+        }
+        case "component":
+          void handleComponentWritten(event.path);
+          break;
+        case "error":
+          say("assistant", `**Error:** ${event.message}`);
+          break;
+        case "done":
+          break;
       }
+    };
+
+    try {
+      await streamAgent({ prompt: text, agentId, sessionId: session.agentSessionId }, onEvent);
     } catch (error) {
-      const latest = sessions().find((item) => item.id === props.sessionId);
-      const fail: AgentMessage = {
-        id: crypto.randomUUID(),
-        agentId: activeAgent(),
-        role: "assistant",
-        content: error instanceof Error ? error.message : "Something went wrong.",
-        timestamp: new Date().toISOString(),
-      };
-      patchSession(props.sessionId, {
-        messages: [...(latest?.messages ?? []), fail],
-        loading: false,
-      });
+      say("assistant", error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      patchSession(props.sessionId, { loading: false });
+      // The agent may have defined services or written files outside a component event.
+      void refreshServices();
+      void refreshTree();
     }
   }
 
@@ -157,7 +190,7 @@ function Conversation(props: { sessionId: string }) {
                   </View>
                   <View class="h-[22px] flex-row items-center gap-2">
                     <Spinner />
-                    <Text class="text-[13px] text-muted-foreground">Generating…</Text>
+                    <Text class="text-[13px] text-muted-foreground">Working…</Text>
                   </View>
                 </View>
               </If>
@@ -170,7 +203,7 @@ function Conversation(props: { sessionId: string }) {
             </View>
             <Text class="text-lg font-semibold text-foreground">How can I help?</Text>
             <Text class="text-center text-[13px] leading-5 text-muted-foreground">
-              Describe a module. The agent writes it and opens it in the editor.
+              Describe a component and the service behind it. The agent writes both and mounts the component.
             </Text>
           </View>
         </If>
@@ -257,6 +290,21 @@ function Conversation(props: { sessionId: string }) {
 }
 
 function MessageRow(props: { msg: AgentMessage; agentName?: string }) {
+  if (props.msg.role === "system") {
+    return (
+      <View class="px-4 py-0.5 pl-[50px]">
+        <TextView
+          markdown={props.msg.content}
+          selectable
+          styles={{
+            root: { fontSize: 12, lineHeight: 18, color: token("muted-foreground") },
+            code: { color: token("code") },
+          }}
+        />
+      </View>
+    );
+  }
+
   if (props.msg.role === "user") {
     return (
       <View class="items-end px-4 py-2">
