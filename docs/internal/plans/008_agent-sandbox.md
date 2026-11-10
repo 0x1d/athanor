@@ -6,28 +6,30 @@ slices:
   sandbox-image: PLANNED
   sandbox-controller: PLANNED
   cpu-budget: PLANNED
-  codex-persistence: PLANNED
+  codex-repo: PLANNED
+  memory-and-sessions: PLANNED
   services-through-sidecar: PLANNED
 ---
 
 # Agent in a Vercel Sandbox
 
 nshde runs on Koyeb; the agent (alchemist sidecar + BEAM) has no deployment yet.
-This plan runs the agent on demand in a [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) on the Hobby plan, started by the nshde server, and keeps it inside the free allowance.
+This plan runs the agent on demand in a [Vercel Sandbox](https://vercel.com/docs/vercel-sandbox) on the Hobby plan, started by the nshde API, and keeps it inside the free allowance.
+The agent's work lives in a separate **codex repo** on GitHub (components and the functions they use) and in Supabase (memory, sessions).
 
-Depends on plan 007: the sidecar and its callbacks need the agent and sidecar tokens.
+Depends on plan 007 (tokens) and plan 009 (Supabase storage). The alchemist side is alchemist plan `2026-11-10-nshde-deployment.md`.
 
-## Why a sandbox
+## Why a sandbox, not Koyeb
 
-- The agent defines and runs Elixir (codex `define` / `call`). That is agent-written code; it should not share a machine with nshde's secrets and storage.
-- The agent is idle most of the time. A sandbox that exists only while someone is prompting costs nothing in between.
-- The Koyeb free instance (if that is the tier in use) is too small for nshde, a BEAM, Node and the Claude Code process together.
+- `define` runs any Elixir with the BEAM's privileges. Next to the API it could read every secret (Claude key, Supabase service key). The Koyeb free tier allows one service, so the agent cannot get its own container there.
+- The free Koyeb instance is too small for Bun, Node, the Claude Code process and a BEAM together, and it sleeps, which kills the BEAM.
+- The agent is idle most of the time; a sandbox that exists only while someone prompts costs nothing in between.
 
-Fallback if the spike in slice 1 fails: a second Koyeb service running the sidecar, private to the Koyeb mesh, with the same tokens.
+Fallback if the spike in slice 1 fails, or on a paid Koyeb plan: a second, private Koyeb service running the sidecar, with the same tokens and the same codex-repo and memory sync.
 
 ## Hobby limits that shape the design
 
-From Vercel's sandbox pricing page (verify at implementation time; figures move):
+From Vercel's sandbox pricing page (verify at implementation time):
 
 | Limit | Hobby |
 | --- | --- |
@@ -38,125 +40,175 @@ From Vercel's sandbox pricing page (verify at implementation time; figures move)
 | Concurrent sandboxes | 10 |
 | Overage | None: sandboxes stop until the allowance resets |
 
-Consequences:
-- No surprise bill. The risk is the agent being unavailable for the rest of the month.
-- Active CPU counts only time the CPU works. An agent turn mostly waits on the Claude API, so it is cheap; installing and compiling is expensive, and so is anything that spins while idle.
-- A sandbox lives at most 45 minutes, so nothing in it persists unless synced out.
+- No surprise bill; the risk is the agent being off for the rest of the month.
+- Active CPU counts only time the CPU works. A turn mostly waits on the Claude API; installing, compiling and idle spinning are what cost.
+- Nothing in a sandbox survives it.
 
 ## Shape
 
 ```mermaid
 flowchart LR
-  UI[IDE] -->|/api/agents| Bun[nshde · Koyeb]
-  Bun -->|Vercel SDK: create from snapshot, extend, stop| Vercel[(Vercel Sandbox API)]
-  Bun -->|HTTPS + sidecar token| Sidecar
+  UI[IDE] -->|/api/agents| API[nshde API · Koyeb]
+  API -->|SDK: create from snapshot, extend, stop, read/write files| Vercel[(Vercel Sandbox API)]
+  API -->|HTTPS + sidecar token| Sidecar
   subgraph Sandbox[Vercel Sandbox · on demand]
     Sidecar[alchemist sidecar · Node] --> Beam[BEAM codex + gateway]
+    Sidecar --> Checkout[codex repo checkout]
   end
-  Sidecar -->|nshde.component.* + agent token| Bun
+  Sidecar -->|component entries, sync + agent token| API
+  Checkout <-->|pull / push| Repo[(GitHub · codex repo)]
   Sidecar -->|Claude API| Anthropic[(api.anthropic.com)]
-  Bun -->|usage ledger, codex mirror| Storage[(nshde storage)]
+  API --> Supa[(Supabase · files, agent-state)]
 ```
+
+## Codex repo
+
+One repo per nshde workspace, separate from alchemist (e.g. `0x1d/nshde-codex`):
+
+```
+components/        <slug>.nsh.tsx, .wasm — the UI modules
+functions/         alchemist codex entries the agent wrote
+  services/<name>/ tool.ex, meta.json — backend services
+  …                any other entry the agent defines
+services.json      published services: [{ slug, source_sha256 }]
+README.md
+```
+
+- `functions/` is an **overlay** on alchemist's own entries (alchemist plan). Alchemist's shipped entries and `functions/lib` stay in alchemist.
+- `components/services.d.ts` is generated from the schemas and gitignored.
+- Publishing a service is a commit to `services.json`, so every published version has a reviewable diff.
+- Supabase `files` (plan 009) is the IDE's **working copy** of `components/` and `services.json`: always available, even with no sandbox. Git is the history and the source of truth between syncs.
+
+### Sync
+
+Alchemist does the git work, inside the sandbox, through a `codex.sync` entry the sidecar also exposes as `POST /sync`.
+
+**When:**
+
+| Trigger | Who starts it |
+| --- | --- |
+| Agent start | Controller, before the first turn |
+| New or changed functions or components after a turn | Sidecar, at turn end, when anything changed |
+| Publish / unpublish a service | nshde API, then sync |
+| User asks | **Sync** button in the explorer → `POST /api/codex/sync` → starts a sandbox if none is up (charged to the budget) → `POST /sync` |
+
+**What one sync does:**
+
+1. `git pull --rebase` the checkout.
+2. **Components and manifest, nshde ↔ repo.** For each file under `components/` and `services.json`, compare three versions by git blob sha: the repo's, nshde's working copy, and `base_sha` (the sha both had at the last sync, stored per file in `files`).
+   - Only the repo changed: write it to nshde.
+   - Only nshde changed: write it to the checkout.
+   - Both changed to different contents: keep nshde's in place, write the repo's next to it as `<name>.remote.nsh.tsx`, report a conflict. Never overwrite silently.
+   - Deleted on one side and unchanged on the other: delete on both.
+3. `functions/` changes come only from the agent (the IDE lists services but does not edit Elixir), so they are committed as they are.
+4. Commit: one commit per sync, message `codex: <summary>` listing the components and entries changed and the session id. `codex.commit_uncommitted` can still be used for per-function commits when the user asks.
+5. `git push`. If rejected, pull and retry once, then report.
+6. Update `base_sha` in nshde for every synced file.
+
+nshde exposes the working-copy side to the sidecar through the agent token (plan 007 slice 4, extended): `GET /api/codex/files` (paths with content sha and `base_sha`), `GET/POST /api/storage` under `components/` and `services.json`, `POST /api/codex/base` (set `base_sha`s).
+
+**Credentials:** a fine-grained GitHub token with *Contents: read and write* on the codex repo only (`CODEX_GITHUB_TOKEN`), passed to the sidecar's environment and used through a git credential helper, not written into the remote URL. Agent-written code can reach it; the damage is limited to that one repo, whose history shows every change.
 
 ## Dependency graph
 
 ```mermaid
 flowchart TD
   image[1. Sandbox image and snapshot]
-  controller[2. Sandbox controller in nshde]
+  controller[2. Sandbox controller]
   budget[3. CPU budget]
-  persist[4. Codex persistence]
-  services[5. Services through the sidecar]
+  repo[4. Codex repo and sync]
+  memory[5. Memory and sessions]
+  services[6. Services through the sidecar]
   image --> controller
   controller --> budget
-  controller --> persist
-  persist --> services
+  controller --> repo
+  controller --> memory
+  repo --> services
 ```
 
 ## Slices
 
 ### 1. Sandbox image and snapshot (spike first)
 
-Goal: a snapshot from which the sidecar is ready in seconds, with no install or compile at start.
+A snapshot from which the sidecar is ready in seconds, with no install or compile at start.
 
-- Base: the Node 24 sandbox runtime.
-- Install Erlang/OTP and Elixir matching alchemist's `flake.nix` (from the distro packages if versions fit, else prebuilt OTP/Elixir tarballs; not Nix, which is slow to bootstrap).
-- Clone alchemist at a pinned commit, `npm ci`, `cd runtime && mix deps.get && mix compile` (so the bridge's `mix compile` is a no-op at start).
-- Snapshot the sandbox. The snapshot id is `NSHDE_AGENT_SNAPSHOT`.
-- Script: `bun run agent:snapshot` (in nshde, `scripts/agent-snapshot.ts`) does all of the above through the SDK and prints the snapshot id. It is run by hand, once per alchemist upgrade. It is the expensive step and is charged to the budget (slice 3).
-- No secrets in the snapshot. `ANTHROPIC_API_KEY` and tokens are passed as env when the sidecar command starts.
-- Record in this plan: OTP/Elixir versions, snapshot size, measured cold start (create → sidecar `listening`), how long Vercel keeps a snapshot.
+- Base: the Node 24 sandbox runtime. Erlang/OTP and Elixir matching alchemist's `flake.nix` (distro packages if versions fit, else prebuilt tarballs; not Nix).
+- Clone alchemist at a pinned commit, `npm ci`, `mix deps.get && mix compile` in `runtime/`.
+- No codex repo, no secrets in the snapshot: they arrive at start.
+- `bun run agent:snapshot` (`scripts/agent-snapshot.ts`) builds it through the SDK and prints the id (`NSHDE_AGENT_SNAPSHOT`). Run by hand per alchemist upgrade; charged to the budget.
+- Record here: versions, snapshot size, cold start (create → sidecar listening), snapshot retention.
 
-Spike exit criteria: from the snapshot, the sidecar answers `POST /sessions` within 15 s and a turn writes a component back to a local nshde. If not reachable, take the fallback above.
+Exit criteria: from the snapshot, the sidecar answers within 15 s and a turn writes a component back to a local nshde. Otherwise take the fallback.
 
-### 2. Sandbox controller in nshde
+### 2. Sandbox controller
 
 `src/lib/agents/sandbox.ts`, used by `/api/agents` when `NSHDE_AGENT_MODE=vercel` (else `NSHDE_AGENT_URL` as today).
 
-- **Auth to Vercel**: `@vercel/sandbox` with an access token: `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID` (Koyeb secrets).
-- **One sandbox at a time.** The controller holds `{ id, url, startedAt, lastTurnAt }` in memory and in storage (`.nshde/agent-sandbox.json`) so a nshde restart reattaches instead of starting a second one.
-- **Start** on the first turn: create from `NSHDE_AGENT_SNAPSHOT`, smallest vCPU size, port `43124` exposed, `timeout` = idle window. Run the sidecar detached with:
-  - `NSHDE_SIDECAR_HOST=0.0.0.0`, `NSHDE_SIDECAR_TOKEN`, `NSHDE_API_URL=<NSHDE_IDE_ORIGIN>`, `NSHDE_AGENT_API_TOKEN`, `ANTHROPIC_API_KEY`, `NSHDE_AGENT_MODEL`
-  - `ELIXIR_ERL_OPTIONS="+S 2:2 +sbwt none +sbwtdcpu none +sbwtdio none"`: stops the BEAM schedulers from busy-waiting while idle, which would otherwise count as active CPU.
-  - Wait for the sidecar's port, then use the sandbox's public URL for that port as the sidecar base URL.
-- **Concurrent first turns** wait on the same start promise.
-- **Idle stop**: idle window `NSHDE_AGENT_IDLE_MIN`, default 5. Each turn extends the timeout to `now + idle window`. The controller stops the sandbox itself after the idle window (after slice 3's final sample and slice 4's sync); Vercel's timeout is the backstop.
-- **Lifetime cap**: `NSHDE_AGENT_MAX_LIFETIME_MIN`, default 40 (under Hobby's 45). A turn is not started on a sandbox that would hit the cap mid-turn: it is synced, stopped, and a new one started.
-- **Turn cap**: `NSHDE_AGENT_TURN_MAX_MIN`, default 10. The controller aborts the upstream stream and sends an `error` event.
-- **UI**: the agent panel shows `starting agent…` during the cold start (a new `status` SSE event from `/api/agents`).
-- **Egress**: if the sandbox network policy allows it, restrict outbound traffic to `api.anthropic.com`, the nshde host, and package registries only for the snapshot script.
+- Vercel SDK with `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`.
+- **One sandbox at a time**; `{ id, url, startedAt, lastTurnAt }` kept in memory and in storage (`.nshde/agent-sandbox.json`) so an API restart or Koyeb wake reattaches.
+- **Start**: create from the snapshot, smallest size, port `43124`, `timeout` = idle window. Restore memory and sessions (slice 5). Start the sidecar detached with `NSHDE_SIDECAR_HOST=0.0.0.0`, `NSHDE_SIDECAR_TOKEN`, `NSHDE_API_URL`, `NSHDE_AGENT_API_TOKEN`, `ANTHROPIC_API_KEY`, `NSHDE_AGENT_MODEL`, `CODEX_REPO`, `CODEX_GITHUB_TOKEN`, and `ELIXIR_ERL_OPTIONS="+S 2:2 +sbwt none +sbwtdcpu none +sbwtdio none"` (no scheduler busy-wait while idle). The sidecar clones the codex repo and syncs (slice 4) before it reports ready. Concurrent first turns share the start.
+- **Idle stop** after `NSHDE_AGENT_IDLE_MIN` (5): final budget sample, sync if dirty, save memory and sessions, stop. Vercel's timeout is the backstop.
+- **Lifetime cap** `NSHDE_AGENT_MAX_LIFETIME_MIN` (40, under 45): no turn starts that would cross it; stop and start fresh instead.
+- **Turn cap** `NSHDE_AGENT_TURN_MAX_MIN` (10): abort and send `error`.
+- New SSE event `status` (`starting agent…`, `syncing…`) for the panel.
+- Egress, if the sandbox network policy allows: `api.anthropic.com`, `github.com`, the nshde API host.
 
 ### 3. CPU budget
 
-Keep usage under the 5-hour allowance with headroom, and fail clearly instead of hitting the wall.
+- Budget `NSHDE_AGENT_CPU_BUDGET_MIN` (240 of 300). Period resets on `NSHDE_AGENT_BUDGET_RESET_DAY` (1, UTC) to match the billing cycle.
+- Measure inside the sandbox from `/proc/stat` (`cpu` line: user + nice + system + irq + softirq, `USER_HZ`): baseline at start, sample at each turn end and before stop, charge the deltas.
+- A sandbox lost before its last sample is charged wall time since the last sample × vCPUs.
+- Snapshot builds are charged the same way.
+- Ledger `.nshde/agent-usage.json`: `{ period, cpuSeconds, wallSeconds, sandboxes, turns }`; `GET /api/agents/usage`.
+- ≥ 80 %: warning in the panel. ≥ 100 %: `429` until the reset date, no sandbox started. A user-requested sync is refused too; the working copy keeps the edits until the next sync.
+- Claude spend: `NSHDE_AGENT_MAX_TURNS_PER_DAY` (50) in the same ledger.
+- Reconcile against Vercel's usage page; tune the budget if they differ by more than 20 %.
 
-- **Budget**: `NSHDE_AGENT_CPU_BUDGET_MIN`, default 240 (4 of the 5 hours; the rest covers snapshot builds and measurement error).
-- **Period**: the Vercel billing cycle. `NSHDE_AGENT_BUDGET_RESET_DAY` (1–28, default 1, UTC) sets when the ledger rolls over.
-- **Measure** active CPU inside the sandbox from `/proc/stat` (the `cpu` line: user + nice + system + irq + softirq, in `USER_HZ`):
-  - Baseline right after start.
-  - Sample at the end of each turn and right before stop. One `cat /proc/stat` per sample.
-  - Charge `sample − previous sample` to the ledger.
-- **Lost sandbox** (crashed, timed out before the final sample): charge the time since the last sample × vCPU count. This overestimates, which is the safe side.
-- **Snapshot builds**: the script samples the same way and charges the ledger.
-- **Ledger**: `.nshde/agent-usage.json` in storage: `{ period, cpuSeconds, wallSeconds, sandboxes, turns, samples: [...] }`. `GET /api/agents/usage` returns it (gated).
-- **Enforcement** before a sandbox start and before each turn:
-  - ≥ 80 %: the turn runs; the panel shows a warning with minutes left.
-  - ≥ 100 %: `429 { "error": "agent CPU budget used up until <reset date>" }`, and no sandbox is started.
-- **Claude spend** is separate from Vercel CPU: `NSHDE_AGENT_MAX_TURNS_PER_DAY`, default 50, counted in the same ledger.
-- **Reconcile**: Vercel's usage page is the truth. If the ledger drifts from it by more than 20 %, tune the budget; the README says where to look.
+### 4. Codex repo and sync
 
-Rough expectation, to check in the spike: a turn spends seconds of active CPU, so 240 minutes is hundreds of turns. Starts from snapshot are the next cost; snapshot builds the largest.
+- Implement the sync above: alchemist `codex.sync` entry and sidecar `POST /sync` (alchemist plan); nshde `/api/codex/*` routes, `base_sha` column on `files`, the **Sync** button, and conflict reporting in the explorer (a `.remote` file shows as a conflict with *keep mine* / *take theirs*).
+- `CODEX_REPO` (`owner/name`) configures the repo. Bootstrapping: an empty repo is initialized with the layout and a README on the first sync.
+- Components written by the agent through `nshde.component.write` land in the working copy as today and reach git at turn-end sync.
 
-### 4. Codex persistence
+### 5. Memory and sessions
 
-The sandbox is thrown away; the agent's work must not be.
+The memory graph is one MiniGraf database file (`AGENT_MEMORY_PATH`) plus a `.tx` counter file. `Runtime.Memory` is the only writer, writes happen only during turns, and MiniGraf checkpoints after every write, so between turns the file on disk is complete.
 
-- Components already persist: `nshde.component.write` writes to nshde storage.
-- **Codex entries** the agent defines (`functions/**` under the alchemist checkout, minus the entries shipped in the snapshot) are mirrored into nshde storage under `codex/`:
-  - After each turn and before stop, the controller lists files changed since start in the sandbox and copies them to storage.
-  - On start, the controller writes `codex/**` from storage into the sandbox before starting the sidecar.
-- **Agent memory and Claude sessions**: the alchemist state dir and the Agent SDK's session transcripts are synced the same way (`agent-state/`), so `sessionId` resumes across sandboxes. If the transcripts are too large or awkward to move, v1 resumes only within one sandbox's life and the panel starts a new session after a restart; record which.
-- Storage on Koyeb: `fs` storage inside the container is lost on redeploy. Use a Koyeb volume or `s3` storage before relying on the mirror. Decide in this slice.
+- **Where**: Supabase Storage, private bucket `agent-state`. Objects are files, so the graph is stored as it is, not converted to rows:
 
-### 5. Services through the sidecar
+  ```
+  memory/<generation>/minigraf.graph
+  memory/<generation>/minigraf.graph.tx
+  memory/current.json   { generation, sha256, bytes, at }
+  sessions/<session-id>.jsonl
+  ```
 
-Today nshde reads services from a local `ALCHEMIST_DIR` and calls the gateway on `127.0.0.1`. Neither exists on Koyeb.
+- **Save** (controller, at turn end when the graph's sha changed, and before stop): read both files out of the sandbox with the SDK, upload them under a new generation, then rewrite `current.json`. Keep the last 10 generations; older ones are deleted. A crash mid-upload leaves `current.json` on the previous complete generation.
+- **Restore** (controller, at start, before the sidecar and BEAM start): download the generation in `current.json` and write it to `AGENT_MEMORY_PATH`. No generation yet: start empty.
+- The `.tx` file is reconciled against the graph on open, so a mismatched pair still opens correctly.
+- The Supabase key stays on Koyeb; the sandbox never sees it.
+- A crash during a turn loses that turn's memory writes, nothing earlier.
+- Not in git: memory is per-user agent state with frequent binary rewrites. Facts already reach git as the memory notes in `codex.commit_uncommitted` messages.
+- **Sessions**: the Agent SDK's transcript for each nshde session (`~/.claude/projects/<cwd>/<id>.jsonl` in the sandbox) is saved and restored the same way, so `sessionId` resumes across sandboxes. If the transcript layout makes this impractical, v1 resumes only within one sandbox and the panel starts a new session after a restart; record which.
 
-- **Listing**: `serviceConfig` gets a storage-backed variant that reads `codex/services/**` from the mirror. The registry logic (schemas, `source_sha256`, stale) is unchanged.
-- **Manifest**: Publish writes `services.json` to storage and, when a sandbox is up, into its state dir.
-- **Calls**: the sidecar adds `POST /services/:name` (sidecar token required). It forwards to the local `Runtime.ServiceGateway` over its framed TCP protocol and returns the JSON. nshde's `handleServiceCall` uses this instead of `callGateway` when `NSHDE_AGENT_MODE=vercel`.
-- **Availability**: a service call needs a running sandbox. v1 does not start one for a service call: it answers `503 gateway_down` with "start the agent to run services". Starting a sandbox on a service call is a follow-up, behind the same budget.
-- alchemist side: the sidecar route, and its README.
+### 6. Services through the sidecar
+
+- **Listing**: nshde's service registry reads `functions/services/**` from the codex repo through the GitHub contents API (cached, refreshed after each sync), instead of a local `ALCHEMIST_DIR`. Schemas, `source_sha256` and stale detection are unchanged.
+- **Publish**: nshde writes `services.json` in the working copy, then syncs. The gateway reads the manifest from the checkout.
+- **Calls**: the sidecar adds `POST /services/:name` (sidecar token), forwarding to the local `Runtime.ServiceGateway`. `handleServiceCall` uses it when `NSHDE_AGENT_MODE=vercel`.
+- **No sandbox up**: `503 gateway_down`, "start the agent to run services". Starting one for a service call is a follow-up, behind the budget.
 
 ## Configuration (Koyeb)
 
 | Variable | Kind | Default |
 | --- | --- | --- |
-| `NSHDE_AGENT_MODE` | Plain | `url` (`vercel` to enable this plan) |
+| `NSHDE_AGENT_MODE` | Plain | `url` (`vercel` for this plan) |
 | `VERCEL_TOKEN` | Secret | |
 | `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID` | Plain | |
 | `NSHDE_AGENT_SNAPSHOT` | Plain | |
 | `ANTHROPIC_API_KEY` | Secret | |
+| `CODEX_REPO` | Plain | |
+| `CODEX_GITHUB_TOKEN` | Secret | |
 | `NSHDE_SIDECAR_TOKEN`, `NSHDE_AGENT_API_TOKEN` | Secret | (plan 007) |
 | `NSHDE_AGENT_IDLE_MIN` | Plain | `5` |
 | `NSHDE_AGENT_MAX_LIFETIME_MIN` | Plain | `40` |
@@ -167,19 +219,22 @@ Today nshde reads services from a local `ALCHEMIST_DIR` and calls the gateway on
 
 ## Tests
 
-- Controller with a fake SDK: one sandbox for concurrent first turns; reattach after restart; idle stop; lifetime cap rolls over to a new sandbox; turn cap aborts.
-- Budget: `/proc/stat` deltas add up; a lost sandbox is charged wall time × vCPU; 80 % warns; 100 % refuses before starting a sandbox; period rollover on the reset day.
-- Persistence: files changed in the sandbox appear under `codex/`; a new sandbox gets them back.
-- Services: listing from the storage mirror; calls go through the sidecar route; no sandbox → 503.
+- Controller with a fake SDK: one sandbox for concurrent turns; reattach after restart; idle stop runs sample, sync, save, stop in that order; lifetime and turn caps.
+- Budget: deltas add up; lost sandbox charged conservatively; 80 % warns; 100 % refuses before starting a sandbox; rollover.
+- Sync (three-way): each case of repo-only, nshde-only, both-changed, delete; push rejected then retried; `base_sha` updated.
+- Memory: save creates a generation and moves `current.json`; restore writes it back; an interrupted save keeps the old pointer; pruning keeps 10.
+- Services: listing from the repo; calls through the sidecar route; no sandbox → 503.
 
 ## Done when
 
-- From the Koyeb IDE, a prompt starts a sandbox, writes a component that mounts in the preview, and the sandbox stops on its own after the idle window.
-- A second prompt after the stop gets a fresh sandbox with the earlier codex entries.
-- The usage ledger matches Vercel's usage page within 20 %, and a turn past the budget is refused without starting a sandbox.
+- From the Koyeb IDE, a prompt starts a sandbox, writes a component and a service, and the next commit in the codex repo contains both.
+- The sandbox stops on its own; a second prompt gets a fresh sandbox that remembers earlier facts and sees earlier functions.
+- An edit made in the IDE while no sandbox runs reaches the repo on the next sync; an edit made on GitHub reaches the IDE.
+- A turn past the budget is refused without starting a sandbox.
 
 ## Open questions
 
-- Is Koyeb on the free tier? It decides whether the slice-1 fallback (second Koyeb service) fits.
-- Vercel snapshot retention: if snapshots expire, the controller needs to detect a missing snapshot and say so rather than build one silently.
-- Does the sandbox port URL keep a long SSE stream open for a whole turn? Check in the spike.
+- Is Koyeb on the free tier? It decides whether the fallback fits.
+- Vercel snapshot retention: if snapshots expire, the controller must say so rather than rebuild silently.
+- Does the sandbox's public port keep a long SSE stream open for a whole turn? Check in the spike.
+- Alternative kept in reserve: nshde (on Koyeb) does the git work through the GitHub API instead of alchemist. User-requested syncs would then not need a sandbox, and the GitHub token would stay out of it. Chosen against for now: alchemist owns its codex and already has the git tooling.
