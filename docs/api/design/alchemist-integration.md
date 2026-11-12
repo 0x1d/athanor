@@ -1,15 +1,22 @@
 ---
-id: "006"
-feature: alchemist-integration
-state: IN_PROGRESS
-slices:
-  agent-sidecar: DONE
-  component-entries: DONE
-  service-gateway: DONE
-  service-binding: DONE
+id: crucible/nshde/api/design/alchemist-integration
+title: Alchemist Integration
+type: DES
+owner: crucible/nshde/api
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/api/design]
+related: []
+planned:
+  - id: crucible/nshde/api/P-06
+    title: Alchemist integration
+    depends: []
+    done: [1, 2, 3, 4]
 ---
 
-# Alchemist integration
+# Alchemist Integration
+
+**Planned** P-06.
 
 The alchemist Claude host becomes the nshde agent.
 It writes frontend components to nshde storage and backend services as Elixir codex entries.
@@ -20,7 +27,7 @@ Components call published services through a call-only gateway.
 ```mermaid
 flowchart LR
   UI[nshde UI] --> Bun[Bun server]
-  Bun -->|/api/agents SSE| Host[alchemist Claude host · Node]
+  Bun -->|/api/agents SSE| Host[alchemist Claude host - Node]
   Host -->|define / load / find / call| Beam[BEAM codex]
   Host -->|nshde.component.*| Bun
   Preview[/preview iframe/] -->|/api/services/:slug + token| Bun
@@ -56,9 +63,9 @@ flowchart TD
 
 Codex entries under `functions/nshde/` that call the nshde storage API:
 
-- `nshde.component.write` — write `components/<slug>.nsh.tsx`. The preview hot-mounts it.
+- `nshde.component.write` - write `components/<slug>.nsh.tsx`. The preview hot-mounts it.
 - `nshde.component.read` / `nshde.component.list`
-- `nshde.component.check` — compile with Sucrase on the nshde side and return errors.
+- `nshde.component.check` - compile with Sucrase on the nshde side and return errors.
 
 nshde adds `POST /api/modules/check` for the compile step.
 

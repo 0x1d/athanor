@@ -1,10 +1,16 @@
 ---
-id: "005"
-feature: runtime-preview
-state: DONE
+id: crucible/nshde/ide/design/runtime-preview
+title: Runtime Preview
+type: DES
+owner: crucible/nshde/ide
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/ide/design]
+related: []
+planned: []
 ---
 
-# Runtime preview and its icon
+# Runtime Preview
 
 Make a mounted TSX module actually run inside the runtime WebView, and give Runtime its own mark.
 

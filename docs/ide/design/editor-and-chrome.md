@@ -1,10 +1,16 @@
 ---
-id: "003"
-feature: editor-and-chrome
-state: DONE
+id: crucible/nshde/ide/design/editor-and-chrome
+title: Editor and Chrome
+type: DES
+owner: crucible/nshde/ide
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/ide/design]
+related: []
+planned: []
 ---
 
-# Editor and chrome
+# Editor and Chrome
 
 Make the editor usable, and make each dock a single tab row that still collapses.
 

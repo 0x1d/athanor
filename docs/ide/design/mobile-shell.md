@@ -1,10 +1,16 @@
 ---
-id: "004"
-feature: mobile-shell
-state: DONE
+id: crucible/nshde/ide/design/mobile-shell
+title: Mobile Shell
+type: DES
+owner: crucible/nshde/ide
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/ide/design]
+related: []
+planned: []
 ---
 
-# Phone shell
+# Mobile Shell
 
 Make the workspace usable below DockArea's compact breakpoint without changing the wide layout.
 
