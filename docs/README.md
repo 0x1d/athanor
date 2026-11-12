@@ -3,6 +3,7 @@ id: crucible/nshde
 title: nshde
 type: index
 owner: crucible
+standard: formulary/0.1
 date: 2026-11-11
 ---
 
@@ -10,7 +11,7 @@ date: 2026-11-11
 
 nshde is a self-extending IDE: an NSH shell in the browser and a Bun API, with the alchemist agent writing components and services into it.
 
-The documents follow the [Crucible specification framework](https://github.com/0x1d/crucible/blob/main/docs/framework.md). Every document has a fully qualified id that equals its path under `docs/`, prefixed with `crucible/nshde`.
+The documents conform to the [Formulary standard](https://github.com/0x1d/formulary). Every document has a fully qualified id that equals its path under `docs/`, prefixed with `crucible/nshde`.
 
 | Component | Profile | Summary |
 | --- | --- | --- |
