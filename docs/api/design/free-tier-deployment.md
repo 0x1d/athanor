@@ -1,14 +1,21 @@
 ---
-id: "009"
-feature: free-tier-deployment
-state: PLANNED
-slices:
-  supabase-storage: PLANNED
-  static-ui-on-vercel: PLANNED
-  thin-api-on-koyeb: PLANNED
+id: crucible/nshde/api/design/free-tier-deployment
+title: Free-tier Deployment
+type: DES
+owner: crucible/nshde/api
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/api/design]
+related: []
+planned:
+  - id: crucible/nshde/api/P-09
+    title: Free-tier deployment
+    depends: []
 ---
 
-# Free-tier deployment
+# Free-tier Deployment
+
+**Planned** P-09.
 
 nshde on free tiers of Vercel, Supabase and Koyeb, plus a GitHub repo for the agent's code.
 Only the Claude API costs money.
@@ -17,13 +24,13 @@ Only the Claude API costs money.
 
 ```mermaid
 flowchart LR
-  Browser --> Vercel[Vercel CDN · IDE + /preview]
+  Browser --> Vercel[Vercel CDN - IDE + /preview]
   Browser --> Auth[(Supabase Auth)]
-  Browser -->|Bearer token| API[Koyeb · Bun API]
-  API --> DB[(Supabase Postgres · files)]
-  API --> Obj[(Supabase Storage · agent-state)]
-  API -->|start / stop / read files| Sandbox[Vercel Sandbox · agent + BEAM]
-  Sandbox <-->|clone / pull / push: components + functions| Codex[(GitHub · codex repo)]
+  Browser -->|Bearer token| API[Koyeb - Bun API]
+  API --> DB[(Supabase Postgres - files)]
+  API --> Obj[(Supabase Storage - agent-state)]
+  API -->|start / stop / read files| Sandbox[Vercel Sandbox - agent + BEAM]
+  Sandbox <-->|clone / pull / push: components + functions| Codex[(GitHub - codex repo)]
   Sandbox -->|component entries| API
 ```
 
@@ -42,8 +49,8 @@ Why the API stays on Koyeb and not on Vercel Functions: agent turns stream for m
 ## Free-tier constraints (check current terms)
 
 - **Supabase** pauses a free project after about a week without activity. Normal use keeps it awake; otherwise a weekly request to `/healthz` that touches the database.
-- **Koyeb** free instances are small and sleep when idle; the first request after a sleep is slow. The API holds no state that matters across a sleep (the sandbox record is in storage, plan 008).
-- **Vercel Hobby** is for non-commercial use. Sandbox CPU is budgeted in plan 008.
+- **Koyeb** free instances are small and sleep when idle; the first request after a sleep is slow. The API holds no state that matters across a sleep (the sandbox record is in storage, `crucible/nshde/api/P-08`).
+- **Vercel Hobby** is for non-commercial use. Sandbox CPU is budgeted in `crucible/nshde/api/P-08`.
 
 ## Dependency graph
 
@@ -71,7 +78,7 @@ A fourth backend beside `fs`, `memory` and `s3`: `NSHDE_STORAGE=supabase`.
     path text primary key,
     content text,
     bytes bytea,
-    base_sha text,  -- git blob sha at the last codex sync (plan 008); null if never synced
+    base_sha text,  -- git blob sha at the last codex sync (`crucible/nshde/api/P-08`); null if never synced
     updated_at timestamptz not null default now(),
     check ((content is null) <> (bytes is null))
   );
@@ -94,14 +101,14 @@ A fourth backend beside `fs`, `memory` and `s3`: `NSHDE_STORAGE=supabase`.
   - Output: `.nsh/out/nshde`
 - `build:preview` writes the preview bundle (today built in memory by `buildPreviewBundle()` at server start) to `preview/index.html`, `preview/runtime.js`, `preview/runtime.css` inside the output.
 - The IDE's API base comes from `NSHDE_API_URL` at build time; `defaultBase()` keeps its localhost rules for dev.
-- `vercel.json`: `cleanUrls`, no-cache on `/preview/*` and `index.html`, long cache on hashed assets, and the security headers from plan 007 slice 3.
+- `vercel.json`: `cleanUrls`, no-cache on `/preview/*` and `index.html`, long cache on hashed assets, and the security headers from `crucible/nshde/api/P-07` slice 3.
 - The preview iframe loads from the Vercel origin; its service calls go to `apiBase` from the `nshde.mount` message.
 
 ### 3. Thin API on Koyeb
 
 - The Docker image drops the NSH CLI and `nsh package`; it runs `bun src/server.ts` only. Faster builds, smaller image.
 - `NSHDE_WEB_DIR` unset: the API serves `/api/*` and `/healthz` only. `/` answers a short text with the UI URL.
-- Storage `supabase`, auth per plan 007, agent per plan 008.
+- Storage `supabase`, auth per `crucible/nshde/api/P-07`, agent per `crucible/nshde/api/P-08`.
 - `/healthz` runs `select 1` against Supabase, so the health check also keeps the Supabase project awake.
 
 ## Configuration
@@ -111,7 +118,7 @@ A fourth backend beside `fs`, `memory` and `s3`: `NSHDE_STORAGE=supabase`.
 | Koyeb | `NSHDE_STORAGE=supabase` | Plain |
 | Koyeb | `NSHDE_SUPABASE_URL` | Plain |
 | Koyeb | `SUPABASE_SERVICE_ROLE_KEY` | Secret |
-| Koyeb | plan 007 and 008 variables | |
+| Koyeb | `crucible/nshde/api/P-07` and 008 variables | |
 | Vercel | `NSHDE_API_URL`, `NSHDE_SUPABASE_URL`, `NSHDE_SUPABASE_ANON_KEY` | Plain (public) |
 
 ## Tests

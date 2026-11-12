@@ -1,10 +1,16 @@
 ---
-id: "001"
-feature: gallery-dock-panes
-state: DONE
+id: crucible/nshde/ide/design/gallery-dock-panes
+title: Gallery Dock Panes
+type: DES
+owner: crucible/nshde/ide
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/ide/design]
+related: []
+planned: []
 ---
 
-# Gallery dock panes
+# Gallery Dock Panes
 
 Match the gallery Dock example for the left and right docks, collapse the runtime to a tab-height rail, and restyle the agent panel after the gallery AI chat.
 

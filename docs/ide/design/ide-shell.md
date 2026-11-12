@@ -1,10 +1,16 @@
 ---
-id: "002"
-feature: ide-shell
-state: DONE
+id: crucible/nshde/ide/design/ide-shell
+title: IDE Shell
+type: DES
+owner: crucible/nshde/ide
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/ide/design]
+related: []
+planned: []
 ---
 
-# IDE shell
+# IDE Shell
 
 Make the workspace behave like Zed and VS Code: agents on the left, the object tree on the right, and a collapse that leaves a rail.
 

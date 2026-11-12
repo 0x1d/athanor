@@ -1,31 +1,36 @@
 ---
-id: "007"
-feature: access-control
-state: PLANNED
-slices:
-  supabase-auth: PLANNED
-  preview-source-handoff: PLANNED
-  cors-and-origins: PLANNED
-  agent-credentials: PLANNED
-  production-config: PLANNED
+id: crucible/nshde/api/design/access-control
+title: Access Control
+type: DES
+owner: crucible/nshde/api
+status: Draft
+date: 2026-11-11
+depends: [crucible/nshde/api/design]
+related: []
+planned:
+  - id: crucible/nshde/api/P-07
+    title: Access control
+    depends: [crucible/nshde/api/P-09]
 ---
 
-# Access control
+# Access Control
+
+**Planned** P-07.
 
 The deployed instance is open: every `/api` route works without credentials and most send `Access-Control-Allow-Origin: *`.
 Anyone with the URL can read, write and delete storage, switch the storage backend, and start agent turns on the owner's Claude credentials.
 
 This plan puts Supabase Auth in front of the API and keeps the preview sandbox as the boundary for agent-written code.
-The deployment it assumes (UI on Vercel, API on Koyeb, data on Supabase) is plan 009.
+The deployment it assumes (UI on Vercel, API on Koyeb, data on Supabase) is `crucible/nshde/api/P-09`.
 
 ## Shape
 
 ```mermaid
 flowchart LR
-  UI[IDE · Vercel origin] -->|sign in| Auth[(Supabase Auth)]
-  UI -->|Authorization: Bearer access token| Gate{Gate · Koyeb API}
+  UI[IDE - Vercel origin] -->|sign in| Auth[(Supabase Auth)]
+  UI -->|Authorization: Bearer access token| Gate{Gate - Koyeb API}
   Gate --> API[/api/*]
-  Preview[/preview iframe · origin null/] -->|Bearer service token| Services[/api/services/:slug/]
+  Preview[/preview iframe - origin null/] -->|Bearer service token| Services[/api/services/:slug/]
   UI -.->|postMessage: module source| Preview
   Agent[alchemist sidecar] -->|Bearer agent token| Gate
 ```
@@ -84,7 +89,7 @@ Slice 2 lands before or with slice 1: once the gate is on, the preview can no lo
   - `GET /healthz` (new: `200 ok`, no data)
   - `POST/OPTIONS /api/services/:slug`: already needs a scoped service token
   - `OPTIONS` preflights on every route (answered by slice 3 without running a handler)
-- `/preview*` and the IDE bundle move to Vercel (plan 009). While Koyeb still serves them, they are exempt too: static, no user data.
+- `/preview*` and the IDE bundle move to Vercel (`crucible/nshde/api/P-09`). While Koyeb still serves them, they are exempt too: static, no user data.
 
 ### 2. Preview source handoff
 
@@ -95,7 +100,7 @@ The preview stops fetching `/api/storage`. The IDE gives it the module instead.
 - The preview (`src/preview/main.tsx`) accepts only `event.source === window.parent` and a well-formed `nshde.mount`. The opaque frame cannot check the parent's origin, so the check is on the window. The payload is code to run in the sandbox, which the preview runs anyway.
 - The preview posts `{ type: "nshde.ready" }` when loaded; the IDE sends after that, and again on every save and **run**.
 - The service token moves from the URL fragment into this message.
-- If the NSH `WebView` gives no handle to the frame's `contentWindow` on the web target, fall back to a one-module read token: `POST /api/preview-tokens { path }` (gated) returns a token for that path (10-minute TTL), and `GET /api/preview-source?path=…` with `Authorization: Bearer <token>` is exempt from the gate. Check the `WebView` API first and record here which path was taken.
+- If the NSH `WebView` gives no handle to the frame's `contentWindow` on the web target, fall back to a one-module read token: `POST /api/preview-tokens { path }` (gated) returns a token for that path (10-minute TTL), and `GET /api/preview-source?path=...` with `Authorization: Bearer <token>` is exempt from the gate. Check the `WebView` API first and record here which path was taken.
 
 ### 3. CORS and origins
 
@@ -111,13 +116,13 @@ The preview stops fetching `/api/storage`. The IDE gives it the module instead.
 
 The sidecar calls back into nshde (`nshde.component.*`), and nshde calls the sidecar. Neither may be open.
 
-- **Agent → nshde**: `NSHDE_AGENT_API_TOKEN` (32+ random bytes), on both sides. nshde accepts `Authorization: Bearer <it>` in place of a Supabase token, only on:
-  - `GET /api/storage?path=components/…` and `?tree=1`
+- **Agent -> nshde**: `NSHDE_AGENT_API_TOKEN` (32+ random bytes), on both sides. nshde accepts `Authorization: Bearer <it>` in place of a Supabase token, only on:
+  - `GET /api/storage?path=components/...` and `?tree=1`
   - `POST /api/storage` with a `path` under `components/` (no `backend`)
   - `POST /api/modules/check`
   Anything else with the agent token: 403.
-- **nshde → sidecar**: `NSHDE_SIDECAR_TOKEN`. `openSidecarStream` sends it; the sidecar refuses requests without it.
-- alchemist side: alchemist plan `2026-11-10-nshde-deployment.md`.
+- **nshde -> sidecar**: `NSHDE_SIDECAR_TOKEN`. `openSidecarStream` sends it; the sidecar refuses requests without it.
+- alchemist side: the alchemist planned change `crucible/alchemist/P-01`.
 - All comparisons with `timingSafeEqual`.
 
 ### 5. Production config
